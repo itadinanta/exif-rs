@@ -70,9 +70,22 @@ impl Reader {
 
     /// Parses the Exif attributes from raw Exif data.
     /// If an error occurred, `exif::Error` is returned.
-    pub fn read_raw(&self, data: Vec<u8>) -> Result<Exif, Error> {
+    pub fn read_raw(&self, buffers: Vec<Vec<u8>>) -> Result<Exif, Error> {
+        let mut data = Vec::new();
         let mut parser = tiff::Parser::new();
-        parser.parse(&data)?;
+        for buffer in &buffers {
+            data.extend_from_slice(buffer);
+        }
+        let mut offset = 0;
+        for (idx, buffer) in buffers.iter().enumerate() {
+            parser.offset = offset as u32;
+            parser.default_context = match idx {
+                1 => crate::tag::Context::Exif,
+                _ => crate::tag::Context::Tiff,
+            };
+            parser.parse(&data[offset..offset + buffer.len()])?;
+            offset += buffer.len();
+        }
         let entry_map = parser.entries.iter().enumerate()
             .map(|(i, e)| (e.ifd_num_tag(), i)).collect();
         Ok(Exif {
@@ -107,14 +120,14 @@ impl Reader {
             buf = png::get_exif_attr(&mut buf.chain(reader))?;
         } else if isobmff::is_heif(&buf) {
             reader.seek(io::SeekFrom::Start(0))?;
-            buf = isobmff::get_exif_attr(reader)?;
+            return self.read_raw(isobmff::get_exif_attr_list(reader)?);
         } else if webp::is_webp(&buf) {
             buf = webp::get_exif_attr(&mut buf.chain(reader))?;
         } else {
             return Err(Error::InvalidFormat("Unknown image format"));
         }
 
-        self.read_raw(buf)
+        self.read_raw(vec!(buf))
     }
 }
 
